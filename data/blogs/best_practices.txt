@@ -1,0 +1,158 @@
+DataFlow Pro Production Best Practices
+========================================
+
+Author: Platform Engineering Team at ScaleStack Inc.
+Published: February 2024
+
+This guide summarizes production deployment best practices we've developed after running DataFlow Pro for 2 years across 5 regional data centers.
+
+Part 1: Infrastructure Best Practices
+---------------------------------------
+
+1.1 Operating System Selection
+Always use Linux for production deployments. We recommend Ubuntu 20.04 LTS or 22.04 LTS. CentOS 8 / RHEL 8 are also excellent choices. Avoid Windows for any high-throughput workload — DataFlow Pro has known threading limitations on Windows due to POSIX dependency, and the Windows port receives less attention from the core engineering team.
+
+1.2 Resource Sizing
+For a production node:
+- Minimum: 8 cores, 16GB RAM, 100GB SSD
+- Recommended: 16 cores, 32GB RAM, 500GB NVMe SSD
+- Network: 1Gbps minimum; 10Gbps for high-throughput deployments
+
+Each DataFlow Pro pipeline consumes approximately 512MB RAM at idle. Budget 1-2GB per pipeline under load.
+
+1.3 High Availability Configuration
+For HA deployments:
+- Run at least 2 DataFlow Pro nodes behind a load balancer
+- Use a shared PostgreSQL cluster (Patroni or AWS RDS with Multi-AZ)
+- Use Redis Sentinel or Redis Cluster for the task queue
+- Implement health check endpoints in your load balancer: GET /health
+
+Part 2: Security Best Practices
+---------------------------------
+
+2.1 API Token Management
+- Create separate API tokens for each application or team
+- Set token expiration (--expires 90d recommended)
+- Rotate tokens every 90 days
+- Never embed tokens in source code — use environment variables or a secrets manager
+
+2.2 TLS Configuration
+Always enable TLS for:
+- The DataFlow Pro API (configure in settings.yaml under server.tls)
+- Connections to external services (use ssl_ca_cert for custom CAs)
+- The admin dashboard
+
+2.3 Network Security
+- Place DataFlow Pro nodes in a private subnet
+- Allow API access only from application servers, not from the public internet
+- Use VPC peering or private endpoints for cloud services (RDS, MSK)
+- Enable audit logging: `audit.enabled: true` in settings.yaml
+
+Part 3: Operational Best Practices
+-------------------------------------
+
+3.1 Backup Strategy
+Before every upgrade and daily in production:
+    dataflow backup --config --output /backups/dataflow-$(date +%Y%m%d)
+    pg_dump dataflow_meta > /backups/meta-$(date +%Y%m%d).sql
+
+Keep 7 days of daily backups and 4 weeks of weekly backups.
+
+3.2 Upgrade Procedures
+Never upgrade directly in production without staging validation. Our process:
+1. Test upgrade in staging environment identical to production
+2. Back up all configs and database
+3. Read the release notes carefully — especially breaking changes
+4. Schedule maintenance window during low-traffic hours
+5. Run upgrade script, then migrate-plugins
+6. Validate all pipelines with smoke tests
+7. Roll back immediately if any pipeline fails post-upgrade
+
+3.3 Plugin Management
+When working with plugins in v2.3:
+- v2.3 plugins are NOT backward compatible with v2.2
+- After any upgrade, always run: dataflow migrate-plugins
+- Test each plugin individually after migration
+- Keep plugin versions pinned in your configuration management tool
+
+3.4 Log Management
+Configure log rotation to prevent disk exhaustion:
+    /var/log/dataflow-pro/*.log {
+        daily
+        rotate 14
+        compress
+        delaycompress
+        missingok
+        notifempty
+    }
+
+Send logs to a centralized system (ELK, Splunk, Datadog) for long-term analysis.
+
+Part 4: Pipeline Design Best Practices
+-----------------------------------------
+
+4.1 Pipeline Granularity
+Design small, focused pipelines rather than monolithic ones:
+- One pipeline per data source / destination pair
+- Keep transform logic simple and testable
+- Use pipeline chaining (output of one into input of another) for complex workflows
+
+4.2 Error Handling
+Always configure error handling in pipelines:
+    options:
+      on_error: "dead_letter_queue"   # don't drop errors silently
+      dead_letter_topic: "dlq-<pipeline-name>"
+      max_retries: 3
+      retry_delay: 30
+
+4.3 Testing Pipelines
+Before deploying a new pipeline to production:
+1. Test with a sample dataset locally
+2. Validate transform scripts with unit tests
+3. Run pipeline in staging with production-like data volume
+4. Monitor lag and error rates for 24 hours before promoting to production
+
+4.4 Idempotency
+Design your pipelines to be idempotent where possible. If a pipeline restarts, it should be able to reprocess data without causing duplicates. Use the `options.enable_deduplication: true` setting for Kafka sources.
+
+Part 5: Troubleshooting Guide
+--------------------------------
+
+Common issues and their root causes:
+
+| Symptom              | Likely Cause               | Resolution                        |
+|----------------------|----------------------------|-----------------------------------|
+| ERR_601 at startup   | Network/firewall issue     | Check connectivity to data source |
+| High lag_ms          | Insufficient parallelism   | Increase options.parallelism      |
+| ERR_901 (OOM)        | Java heap too small        | Increase -Xmx in engine.conf      |
+| ERR_999 randomly     | Hidden JVM error           | Enable DEBUG logging              |
+| Plugin load failure  | v2.2/v2.3 incompatibility  | Run migrate-plugins               |
+
+Part 6: Deployment Checklist
+-------------------------------
+
+Pre-deployment:
+[ ] Server meets hardware requirements (8+ cores, 16GB+ RAM)
+[ ] OS is Linux (Ubuntu 20.04+ or equivalent)
+[ ] Java 11+, PostgreSQL 13+, Redis 6.2+ installed
+[ ] Backup of existing installation complete
+[ ] Staging validation passed
+
+Installation:
+[ ] Installer run with sudo
+[ ] settings.yaml configured with correct DB and Redis credentials
+[ ] connection.timeout set appropriately (default 30s recommended)
+[ ] TLS configured for API
+[ ] systemd service enabled with auto-restart
+
+Post-installation:
+[ ] Health check returns {"status": "healthy"}
+[ ] All plugins migrated and tested
+[ ] Monitoring (Prometheus) configured
+[ ] Alerting rules active
+[ ] Log rotation configured
+[ ] Runbook documented for on-call team
+
+Conclusion
+----------
+Following these best practices will save you from the most common pitfalls. The DataFlow Pro community forum is also an excellent resource for operational questions. Share your own learnings — the community is what makes this platform great.

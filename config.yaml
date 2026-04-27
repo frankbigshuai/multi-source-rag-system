@@ -1,0 +1,35 @@
+deepseek:
+  api_key: "${DEEPSEEK_API_KEY}"
+  model: "deepseek-chat"
+  base_url: "https://api.deepseek.com"
+  max_tokens: 1024
+  temperature: 0.1
+
+embedding:
+  model: "all-MiniLM-L6-v2"
+  batch_size: 32
+
+reranker:
+  model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  top_k: 5
+
+retrieval:
+  top_k_per_source: 5
+  rrf_k: 60
+
+chroma:
+  persist_directory: "./chroma_db"
+  collections:
+    - docs
+    - forums
+    - blogs
+
+conflict:
+  authority_weights:
+    docs: 1.0
+    blogs: 0.6
+    forums: 0.3
+
+logging:
+  file: "rag.log"
+  level: "INFO"

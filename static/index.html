@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>DataFlow Pro — Technical Support</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 16px;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 36px;
+    }
+    .header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.5px;
+    }
+    .header p {
+      margin-top: 8px;
+      color: #64748b;
+      font-size: 14px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 20px;
+      padding: 4px 12px;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 12px;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #22c55e; }
+
+    /* Main card */
+    .card {
+      width: 100%;
+      max-width: 780px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 28px;
+    }
+
+    /* Input area */
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+    textarea {
+      flex: 1;
+      background: #0f1117;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      color: #e2e8f0;
+      font-size: 15px;
+      padding: 12px 16px;
+      resize: none;
+      height: 56px;
+      line-height: 1.5;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    textarea:focus { border-color: #3b82f6; }
+    textarea::placeholder { color: #475569; }
+
+    button {
+      background: #3b82f6;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 0 22px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, opacity 0.2s;
+      white-space: nowrap;
+    }
+    button:hover { background: #2563eb; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Sample questions */
+    .samples {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .sample-btn {
+      background: #0f1117;
+      border: 1px solid #334155;
+      color: #94a3b8;
+      border-radius: 20px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-weight: 400;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .sample-btn:hover {
+      border-color: #3b82f6;
+      color: #e2e8f0;
+      background: #0f1117;
+    }
+
+    /* Loading */
+    .loading {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-top: 24px;
+      color: #64748b;
+      font-size: 14px;
+    }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid #334155;
+      border-top-color: #3b82f6;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Result */
+    .result { display: none; margin-top: 24px; }
+
+    .answer-box {
+      background: #0f1117;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 18px 20px;
+      font-size: 14px;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    /* Conflict banner */
+    .conflict-banner {
+      margin-top: 14px;
+      background: #1c1408;
+      border: 1px solid #854d0e;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #fbbf24;
+      white-space: pre-wrap;
+    }
+
+    /* Meta row */
+    .meta {
+      margin-top: 14px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .meta-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #0f1117;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .meta-pill span { color: #e2e8f0; font-weight: 600; }
+    .pill-docs  { border-color: #1d4ed8; color: #93c5fd; }
+    .pill-forums { border-color: #7c3aed; color: #c4b5fd; }
+    .pill-blogs  { border-color: #0f766e; color: #5eead4; }
+
+    /* Log */
+    .log-box {
+      margin-top: 10px;
+      font-size: 11px;
+      color: #475569;
+      font-family: monospace;
+      padding: 8px 12px;
+      background: #0f1117;
+      border-radius: 8px;
+      border: 1px solid #1e293b;
+      overflow-x: auto;
+    }
+
+    /* Divider */
+    .divider {
+      border: none;
+      border-top: 1px solid #1e293b;
+      margin: 24px 0;
+    }
+
+    /* Markdown-ish rendering */
+    .answer-box strong { color: #fff; font-weight: 600; }
+    .answer-box code {
+      background: #1e293b;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: monospace;
+      font-size: 13px;
+      color: #7dd3fc;
+    }
+
+    /* Error */
+    .error-box {
+      margin-top: 16px;
+      background: #1c0a0a;
+      border: 1px solid #991b1b;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #fca5a5;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>DataFlow Pro Support</h1>
+    <p>Multi-Source RAG · Docs · Forums · Blogs</p>
+    <div class="badge"><div class="dot"></div>System Online</div>
+  </div>
+
+  <div class="card">
+    <div class="input-row">
+      <textarea id="questionInput" placeholder="Ask a question about DataFlow Pro…" rows="1"
+        onkeydown="handleKey(event)"></textarea>
+      <button id="askBtn" onclick="askQuestion()">Ask</button>
+    </div>
+
+    <div class="samples">
+      <button class="sample-btn" onclick="fillQ('What should the connection timeout be set to?')">Connection timeout?</button>
+      <button class="sample-btn" onclick="fillQ('What is ERR_601 and how do I fix it?')">ERR_601 error</button>
+      <button class="sample-btn" onclick="fillQ('How do I install DataFlow Pro?')">Installation guide</button>
+      <button class="sample-btn" onclick="fillQ('How can I optimize performance?')">Performance tips</button>
+      <button class="sample-btn" onclick="fillQ('Does DataFlow Pro support connecting to a Mars database?')">Mars database?</button>
+      <button class="sample-btn" onclick="fillQ('What are best practices for production?')">Best practices</button>
+    </div>
+
+    <div class="loading" id="loading">
+      <div class="spinner"></div>
+      Retrieving from 3 sources and generating answer…
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <div class="result" id="result">
+      <hr class="divider"/>
+
+      <div class="answer-box" id="answerBox"></div>
+
+      <div class="conflict-banner" id="conflictBanner" style="display:none"></div>
+
+      <div class="meta" id="metaRow"></div>
+
+      <div class="log-box" id="logBox"></div>
+    </div>
+  </div>
+
+  <script>
+    function fillQ(text) {
+      document.getElementById('questionInput').value = text;
+      document.getElementById('questionInput').focus();
+    }
+
+    function handleKey(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        askQuestion();
+      }
+    }
+
+    function renderMarkdown(text) {
+      return text
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/^(\d+)\.\s/gm, '<br><strong>$1.</strong> ')
+        .replace(/^[-*]\s/gm, '<br>• ');
+    }
+
+    async function askQuestion() {
+      const q = document.getElementById('questionInput').value.trim();
+      if (!q) return;
+
+      // Reset UI
+      document.getElementById('loading').style.display = 'flex';
+      document.getElementById('result').style.display = 'none';
+      document.getElementById('errorBox').style.display = 'none';
+      document.getElementById('askBtn').disabled = true;
+
+      try {
+        const resp = await fetch('/query', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q })
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.detail || 'Server error');
+        }
+
+        const data = await resp.json();
+
+        // Answer
+        document.getElementById('answerBox').innerHTML = renderMarkdown(data.answer);
+
+        // Conflict
+        const conflictEl = document.getElementById('conflictBanner');
+        if (data.conflicts) {
+          conflictEl.textContent = data.conflicts;
+          conflictEl.style.display = 'block';
+        } else {
+          conflictEl.style.display = 'none';
+        }
+
+        // Source pills
+        const metaRow = document.getElementById('metaRow');
+        metaRow.innerHTML = '';
+
+        const colors = { docs: 'pill-docs', forums: 'pill-forums', blogs: 'pill-blogs' };
+        for (const [src, cnt] of Object.entries(data.source_counts)) {
+          const pill = document.createElement('div');
+          pill.className = `meta-pill ${colors[src] || ''}`;
+          pill.innerHTML = `${src} <span>${cnt} chunk${cnt > 1 ? 's' : ''}</span>`;
+          metaRow.appendChild(pill);
+        }
+
+        // Latency pill
+        const latencyPill = document.createElement('div');
+        latencyPill.className = 'meta-pill';
+        latencyPill.innerHTML = `latency <span>${Math.round(data.latency_ms)}ms</span>`;
+        metaRow.appendChild(latencyPill);
+
+        // Log
+        document.getElementById('logBox').textContent = data.log;
+
+        document.getElementById('result').style.display = 'block';
+
+      } catch (err) {
+        const errBox = document.getElementById('errorBox');
+        errBox.textContent = '⚠ ' + err.message;
+        errBox.style.display = 'block';
+      } finally {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('askBtn').disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

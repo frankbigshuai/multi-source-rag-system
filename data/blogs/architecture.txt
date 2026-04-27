@@ -1,0 +1,153 @@
+DataFlow Pro Architecture Deep Dive
+=====================================
+
+Author: Dr. Wei Zhang, Principal Engineer at DataFlow Inc.
+Published: January 2024
+
+This post provides an in-depth look at DataFlow Pro's internal architecture, covering the pipeline execution engine, distributed coordination, and the plugin system introduced in v2.3.
+
+Section 1: High-Level Architecture Overview
+---------------------------------------------
+
+DataFlow Pro is built on a three-tier architecture:
+
+Tier 1 — Control Plane
+The control plane handles pipeline orchestration, scheduling, and state management. It runs as a set of stateless services backed by PostgreSQL for persistent state and Redis for distributed locking and task queues. The REST API server (FastAPI-based) serves as the entry point for all management operations.
+
+Tier 2 — Execution Engine
+The execution engine is a JVM-based component (written in Scala) that handles the actual data processing. It communicates with the control plane via gRPC. Each pipeline instance runs as an isolated execution context within the engine, with its own thread pool, buffer allocations, and error boundary.
+
+Tier 3 — Connector Layer
+Connectors are responsible for reading from sources and writing to sinks. Each connector type (Kafka, PostgreSQL, MySQL, S3, HTTP, File) implements a standardized interface: connect(), read_batch(), write_batch(), and disconnect(). In v2.3, connectors are loaded as plugins, allowing custom connectors to be written and deployed without recompiling the core.
+
+Section 2: The Execution Engine Deep Dive
+-------------------------------------------
+
+2.1 Pipeline Execution Model
+Each pipeline has a linear directed acyclic graph (DAG) of stages:
+  Source Reader → Transform Chain → Sink Writer
+
+Multiple pipelines run concurrently in the same JVM, sharing the thread pool and off-heap buffers. The parallelism setting controls the number of threads dedicated to each pipeline's processing stage.
+
+2.2 Thread Pool Architecture
+DataFlow Pro uses a work-stealing thread pool (ForkJoinPool) for CPU-bound transforms. I/O operations (source reads and sink writes) use a separate, larger thread pool to avoid blocking CPU threads.
+
+This is why I/O-bound pipelines benefit from higher parallelism than CPU cores: the extra threads compensate for I/O wait time.
+
+2.3 Buffer Management
+DataFlow Pro uses off-heap direct ByteBuffers for I/O to minimize GC pressure. Buffers are managed by a pool to avoid allocation overhead. The buffer pool size is controlled by -XX:MaxDirectMemorySize in engine.conf.
+
+When the buffer pool is exhausted, pipelines will block until buffers are returned. This is a form of backpressure that prevents OOM errors at the cost of increased lag.
+
+2.4 State Management
+Stateless transforms (filter, map, enrich) require no coordination. Stateful transforms (windowed aggregations, deduplication) use Redis for shared state across parallel workers. This is why Redis 6.2+ with sufficient maxmemory is critical for stateful pipeline workloads.
+
+Section 3: Distributed Coordination
+--------------------------------------
+
+3.1 Multi-Node Deployment
+In a multi-node DataFlow Pro deployment, nodes use Redis for leader election and distributed locking. One node acts as the "scheduler" at any time, responsible for assigning pipeline runs to execution nodes.
+
+Pipeline execution is distributed: a single pipeline can run on multiple nodes simultaneously if sharding is enabled. Kafka topic partitions are distributed across nodes, with each node owning a subset of partitions.
+
+3.2 Failure Recovery
+When a node fails:
+1. Redis TTL on the node's heartbeat key expires (default 10 seconds)
+2. The scheduler detects the failure and marks the node as dead
+3. Pipelines running on the dead node are reassigned to healthy nodes
+4. Pipelines resume from the last committed offset (Kafka) or checkpoint
+
+Recovery time is typically 10-30 seconds from node failure to pipeline resumption.
+
+3.3 Exactly-Once Semantics
+DataFlow Pro supports exactly-once semantics for Kafka-to-Kafka pipelines using the Kafka Transactions API. For other sink types, at-least-once is guaranteed. Use idempotent writes at the sink level to achieve effectively-exactly-once behavior.
+
+Section 4: The v2.3 Plugin Architecture
+------------------------------------------
+
+4.1 Why v2.3 Broke Compatibility
+The v2.2 plugin system used a simple JAR loading mechanism. It had significant limitations:
+- No isolation between plugins (a buggy plugin could crash the engine)
+- No versioning support
+- No async I/O capability
+- Limited access to DataFlow internals
+
+v2.3 introduced a complete rewrite using an isolated classloader per plugin, async I/O based on Java NIO2, and a well-defined SDK. This required changing the plugin interface, breaking backward compatibility with v2.2 plugins.
+
+4.2 Plugin Lifecycle
+Plugins follow a well-defined lifecycle:
+  install → configure → start → running → stop → uninstall
+
+Each lifecycle transition is logged and emits a webhook event (if configured). The control plane monitors plugin health and can restart failed plugins automatically.
+
+4.3 Writing a Custom Plugin
+To write a custom connector plugin, implement the ConnectorPlugin interface from the DataFlow Pro SDK:
+
+    public class MyConnector implements ConnectorPlugin {
+        @Override public void connect(Map<String, Object> config) { ... }
+        @Override public List<Record> readBatch(int maxRecords) { ... }
+        @Override public void writeBatch(List<Record> records) { ... }
+        @Override public void disconnect() { ... }
+    }
+
+Package as a JAR with plugin.yaml manifest, then deploy with:
+    dataflow plugin install --file my-connector.jar
+
+Section 5: Observability Architecture
+----------------------------------------
+
+5.1 Metrics
+DataFlow Pro exposes Prometheus-compatible metrics at /metrics. Metrics are organized in three namespaces:
+- dataflow_system_*: JVM, CPU, memory
+- dataflow_pipeline_*: per-pipeline throughput, lag, errors
+- dataflow_connector_*: per-connector I/O rates, connection health
+
+5.2 Distributed Tracing
+v2.3 added OpenTelemetry support. Each record processed carries a trace context through the pipeline. Enable with:
+    observability:
+      tracing:
+        enabled: true
+        exporter: jaeger
+        endpoint: http://jaeger:14268/api/traces
+
+5.3 Structured Logging
+All DataFlow Pro logs are structured JSON, enabling easy parsing by log aggregation systems. Each log entry includes: timestamp, level, pipeline_id, trace_id, and message.
+
+Section 6: Security Architecture
+-----------------------------------
+
+6.1 Authentication and Authorization
+The API uses Bearer token authentication. Tokens are stored as bcrypt hashes in PostgreSQL. RBAC is available in Enterprise tier: admin, operator, and viewer roles.
+
+6.2 Data Encryption
+- In-transit: TLS 1.2+ required for all API connections; connector TLS is configurable per source/sink
+- At-rest: DataFlow Pro does not encrypt data at rest itself; rely on the underlying storage's encryption (e.g., PostgreSQL TDE, S3 SSE)
+
+6.3 Audit Logging
+When audit logging is enabled, all API calls and pipeline state changes are written to an immutable audit log in PostgreSQL. This satisfies SOC2 and GDPR audit requirements.
+
+Section 7: Roadmap (as of v2.3)
+----------------------------------
+
+The DataFlow Pro team has announced the following upcoming features:
+- v2.4 (Q2 2024): Native Kubernetes operator, horizontal auto-scaling
+- v2.5 (Q3 2024): Native SQL support for transform scripts
+- v3.0 (2025): Complete rewrite of the control plane in Go, eliminating PostgreSQL dependency for small deployments
+
+Section 8: Performance Characteristics
+-----------------------------------------
+
+On reference hardware (16-core, 32GB RAM, NVMe SSD):
+- Maximum throughput (stateless pipeline): ~50,000 records/sec per node
+- Maximum throughput (windowed aggregation): ~8,000 records/sec per node
+- API response time (p99): < 50ms
+- Pipeline startup time: 2-5 seconds
+- Failure recovery time: 10-30 seconds
+
+These numbers are for single-node deployments. Horizontal scaling is near-linear up to about 8 nodes, after which coordination overhead becomes significant.
+
+Conclusion
+----------
+DataFlow Pro's architecture prioritizes throughput, reliability, and extensibility. The v2.3 plugin system opens up the platform to custom integrations while providing better isolation and stability than the previous approach. Understanding this architecture helps operators make informed decisions about deployment topology, resource allocation, and troubleshooting strategies.
+
+For architecture questions and contributions, visit the DataFlow Pro community at community.dataflowpro.io.

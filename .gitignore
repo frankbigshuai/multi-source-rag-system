@@ -1,0 +1,11 @@
+# API key — never commit
+.env
+
+# Generated files
+chroma_db/
+bm25_indices.pkl
+rag.log
+results.json
+__pycache__/
+*.pyc
+.DS_Store

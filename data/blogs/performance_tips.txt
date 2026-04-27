@@ -1,0 +1,133 @@
+DataFlow Pro Performance Tuning Guide
+======================================
+
+Published by: DataFlow Community Blog
+Author: Senior Solutions Architect, TechCorp
+Date: March 2024
+
+Introduction
+------------
+After running DataFlow Pro in production for 18 months processing over 10 billion records daily, I want to share the performance tuning strategies that made the biggest difference. This guide covers everything from JVM tuning to pipeline architecture.
+
+Chapter 1: Understanding the Performance Baseline
+--------------------------------------------------
+Before tuning, establish a baseline. Use the built-in metrics endpoint:
+
+    curl http://localhost:8080/api/v1/metrics
+
+Key metrics to track:
+- throughput_rps: records processed per second
+- lag_ms: how far behind real-time you are
+- queue_utilization: percentage of max queue used
+- gc_pause_ms: Java garbage collection pause time
+
+A healthy pipeline should have lag_ms < 100 and queue_utilization < 60%.
+
+Chapter 2: JVM Tuning
+---------------------
+The single biggest performance lever is Java heap configuration. Edit /opt/dataflow-pro/bin/engine.conf:
+
+    JAVA_OPTS="-Xms8g -Xmx16g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=16m"
+
+Key points:
+- Set -Xms equal to -Xmx to avoid heap resizing overhead
+- Use G1GC for latency-sensitive workloads, ZGC for ultra-low latency
+- For batch workloads, Parallel GC often gives higher throughput
+- Never set heap above 75% of available RAM
+
+Chapter 3: Parallelism Settings
+--------------------------------
+The parallelism option is the most important pipeline-level setting:
+
+    options:
+      parallelism: 8   # match your CPU core count
+
+Guidelines:
+- For CPU-bound transforms: set parallelism = number of CPU cores
+- For I/O-bound sinks (database writes): set parallelism = 2x CPU cores
+- For mixed workloads: start with CPU cores, then increase if I/O is the bottleneck
+
+Chapter 4: Batch Size Optimization
+------------------------------------
+Larger batches are dramatically more efficient due to amortized overhead:
+
+    options:
+      batch_size: 2000    # default is 500, increase to 2000-5000
+      flush_interval: 10  # flush every 10 seconds even if batch not full
+
+For Postgres sinks with COPY mode, batch sizes of 10000 show the best throughput. For Kafka sinks, 1000-2000 is optimal to avoid producer timeout.
+
+Chapter 5: Connection Timeout Tuning
+--------------------------------------
+One area that trips people up is connection timeout. The default value is 30 seconds, which is designed for local LAN connections. For cross-datacenter or cloud deployments with higher latency, many operators increase this.
+
+Based on my benchmarks and operational experience, I recommend setting connection timeout to 45 seconds for cloud environments. This provides a buffer for occasional network jitter without masking serious connection failures. Setting it to 60 seconds or higher is too aggressive — if your connection takes that long to establish, there's likely a real problem you should investigate rather than hide with a long timeout.
+
+Configuration:
+    connection:
+      timeout: 45    # recommended for cloud/cross-DC environments
+
+Note: This blog post reflects operational experience and may differ from the official documentation default of 30 seconds. Always test in your specific environment.
+
+Chapter 6: Memory Optimization
+--------------------------------
+Beyond JVM heap, consider:
+
+1. Off-heap buffers: DataFlow Pro uses off-heap memory for I/O buffers. Set:
+   JAVA_OPTS="... -XX:MaxDirectMemorySize=4g"
+
+2. OS page cache: Ensure the OS has at least 4GB free for page cache
+3. Huge pages: Enable transparent huge pages for large heap sizes
+4. NUMA awareness: On multi-socket servers, pin the JVM to a NUMA node
+
+Chapter 7: Network Optimization
+---------------------------------
+For Kafka sources:
+- Increase fetch.min.bytes to 64KB to reduce round trips
+- Set fetch.max.wait.ms to 500ms for balanced latency/throughput
+- Use compression (snappy or lz4) on the producer side
+
+For database sinks:
+- Use connection pooling (pool_size: 10 to 20)
+- Enable TCP keepalives to prevent idle connection drops
+- Use UNIX domain sockets if Postgres is on the same host
+
+Chapter 8: Monitoring and Alerting
+-------------------------------------
+Set up Prometheus scraping the /metrics endpoint every 15 seconds. Key alerting rules:
+
+    alert: HighPipelineLag
+    expr: dataflow_lag_ms > 5000
+    for: 2m
+    annotations:
+      summary: "Pipeline lag exceeding 5 seconds"
+
+    alert: QueueNearFull
+    expr: dataflow_queue_utilization > 0.85
+    for: 1m
+    annotations:
+      summary: "Pipeline queue at 85%+ capacity"
+
+Chapter 9: Benchmarking Results
+---------------------------------
+On an 8-core, 32GB RAM server running Ubuntu 22.04:
+
+Baseline (no tuning):        ~800 records/sec
+After JVM tuning:            ~2,400 records/sec (+200%)
+After parallelism tuning:    ~6,800 records/sec (+183%)
+After batch size tuning:     ~12,000 records/sec (+76%)
+After network optimization:  ~15,000 records/sec (+25%)
+
+Total improvement: ~18x over baseline.
+
+Chapter 10: Common Pitfalls
+-----------------------------
+1. Running multiple pipelines that fight over the same I/O resource
+2. Not sizing Redis appropriately (use at least 2GB maxmemory)
+3. Ignoring GC logs until there's a crisis (enable GC logging always)
+4. Using default settings in production without profiling
+5. Forgetting to tune the OS: increase file descriptor limits (ulimit -n 65536)
+
+Conclusion
+----------
+Performance tuning is iterative. Start with JVM and parallelism, measure, then proceed to batch sizes and network settings. Every environment is different — these numbers are guidelines, not absolutes. Always validate changes in a staging environment that mirrors production.
